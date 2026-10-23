@@ -1,0 +1,20 @@
+{
+  "name": "cfm-international-bank-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Simulation-only banking education project",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.0",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.1.0"
+  }
+}
