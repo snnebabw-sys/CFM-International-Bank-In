@@ -13,7 +13,7 @@ app.disable("x-powered-by");
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: "10mb" }));
 
-// CORS
+// ====================== CORS ======================
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
   .map((origin) => origin.trim().replace(/\/$/, ""))
@@ -47,6 +47,7 @@ app.use(
   })
 );
 
+// ====================== SUPABASE ======================
 const {
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
@@ -76,7 +77,7 @@ const validAmount = (value) =>
   Number(value) > 0 &&
   Math.round(Number(value) * 100) === Number(value) * 100;
 
-// ====================== AUTH ======================
+// ====================== AUTH MIDDLEWARE ======================
 async function auth(req, res, next) {
   try {
     const match = (req.headers.authorization || "").match(/^Bearer (.+)$/);
@@ -257,6 +258,7 @@ app.post("/api/transfers", auth, async (req, res, next) => {
 
 // ====================== ADMIN ======================
 
+// LIST ACCOUNTS
 app.get("/api/admin/accounts", auth, adminOnly, async (_req, res, next) => {
   try {
     const { data: accounts, error } = await adminDb
@@ -296,7 +298,7 @@ app.get("/api/admin/accounts", auth, adminOnly, async (_req, res, next) => {
   }
 });
 
-// CREATE ACCOUNT + PHOTO
+// CREATE ACCOUNT + PHOTO + 5 RANDOM HISTORY (2 Transfer + 3 Receive)
 app.post("/api/admin/accounts", auth, adminOnly, async (req, res, next) => {
   let newUserId;
 
@@ -323,7 +325,7 @@ app.post("/api/admin/accounts", auth, adminOnly, async (req, res, next) => {
       return fail(res, 400, "Check the fields. Password must be at least 6 characters.");
     }
 
-    // Create user
+    // 1. Create user
     const { data: created, error: createError } = await adminDb.auth.admin.createUser({
       email,
       password,
@@ -337,7 +339,7 @@ app.post("/api/admin/accounts", auth, adminOnly, async (req, res, next) => {
 
     newUserId = created.user.id;
 
-    // Create account
+    // 2. Create bank account
     const { data: account, error: accountError } = await adminDb.rpc(
       "cfm_create_customer_account",
       {
@@ -357,9 +359,8 @@ app.post("/api/admin/accounts", auth, adminOnly, async (req, res, next) => {
       return fail(res, 500, "Account setup failed.");
     }
 
-    // Upload photo
+    // 3. Upload photo
     let avatar_url = null;
-
     if (avatarBase64 && typeof avatarBase64 === "string" && avatarBase64.startsWith("data:image")) {
       try {
         const matches = avatarBase64.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
@@ -391,6 +392,85 @@ app.post("/api/admin/accounts", auth, adminOnly, async (req, res, next) => {
       } catch (err) {
         console.error("Avatar upload failed:", err.message);
       }
+    }
+
+    // 4. Generate 5 random transactions (2 Transfer + 3 Receive) over last 6 months
+    try {
+      const accountNumber = account?.account_number;
+
+      if (accountNumber) {
+        const incomingDescriptions = [
+          "Salary payment",
+          "Incoming transfer",
+          "Payment received",
+          "Client payment",
+          "Refund received",
+          "Bonus credit",
+          "Investment return"
+        ];
+
+        const outgoingDescriptions = [
+          "Transfer sent",
+          "Bill payment",
+          "Online purchase",
+          "Service payment",
+          "Subscription payment",
+          "Merchant payment"
+        ];
+
+        const transactions = [];
+
+        // 3 Incoming (Receive)
+        for (let i = 0; i < 3; i++) {
+          const daysAgo = Math.floor(Math.random() * 180) + 5;
+          const createdAt = new Date();
+          createdAt.setDate(createdAt.getDate() - daysAgo);
+
+          transactions.push({
+            owner_id: newUserId,
+            account_number: accountNumber,
+            amount: Number((Math.random() * 2800 + 80).toFixed(2)),
+            currency: currency,
+            direction: "in",
+            description: incomingDescriptions[Math.floor(Math.random() * incomingDescriptions.length)],
+            counterparty: "External Sender",
+            status: "completed",
+            created_at: createdAt.toISOString()
+          });
+        }
+
+        // 2 Outgoing (Transfer)
+        for (let i = 0; i < 2; i++) {
+          const daysAgo = Math.floor(Math.random() * 180) + 5;
+          const createdAt = new Date();
+          createdAt.setDate(createdAt.getDate() - daysAgo);
+
+          transactions.push({
+            owner_id: newUserId,
+            account_number: accountNumber,
+            amount: Number((Math.random() * 1200 + 40).toFixed(2)),
+            currency: currency,
+            direction: "out",
+            description: outgoingDescriptions[Math.floor(Math.random() * outgoingDescriptions.length)],
+            counterparty: "External Receiver",
+            status: "completed",
+            created_at: createdAt.toISOString()
+          });
+        }
+
+        // Sort by date
+        transactions.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+        const { error: txError } = await adminDb
+          .from("transactions")
+          .insert(transactions);
+
+        if (txError) {
+          console.error("Failed to insert history:", txError.message);
+        }
+      }
+    } catch (err) {
+      console.error("History generation error:", err.message);
     }
 
     newUserId = null;
