@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 
 app.disable("x-powered-by");
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.json({ limit: "10mb" })); // increased for base64 images
+app.use(express.json({ limit: "10mb" }));
 
 // CORS
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
@@ -25,14 +25,8 @@ app.use((req, res, next) => {
   if (origin && allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Authorization, Content-Type"
-    );
-    res.setHeader(
-      "Access-Control-Allow-Methods",
-      "GET, POST, PATCH, DELETE, OPTIONS"
-    );
+    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   } else if (origin) {
     return res.status(403).json({ error: "Origin not allowed." });
   }
@@ -40,7 +34,6 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") {
     return res.sendStatus(204);
   }
-
   next();
 });
 
@@ -83,7 +76,7 @@ const validAmount = (value) =>
   Number(value) > 0 &&
   Math.round(Number(value) * 100) === Number(value) * 100;
 
-// ====================== AUTH MIDDLEWARE ======================
+// ====================== AUTH ======================
 async function auth(req, res, next) {
   try {
     const match = (req.headers.authorization || "").match(/^Bearer (.+)$/);
@@ -129,8 +122,7 @@ app.get("/api/health", (_req, res) => {
 app.post("/api/login", async (req, res, next) => {
   try {
     const email = clean(req.body?.email, 254).toLowerCase();
-    const password =
-      typeof req.body?.password === "string" ? req.body.password : "";
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
 
     if (!email || !password) {
       return fail(res, 400, "Email and password are required.");
@@ -172,7 +164,7 @@ app.get("/api/me", auth, (req, res) => {
   res.json({ profile: req.profile });
 });
 
-// CUSTOMER ACCOUNT (includes avatar)
+// CUSTOMER ACCOUNT
 app.get("/api/me/account", auth, async (req, res, next) => {
   try {
     if (req.profile.role !== "customer") {
@@ -263,9 +255,8 @@ app.post("/api/transfers", auth, async (req, res, next) => {
   }
 });
 
-// ====================== ADMIN ROUTES ======================
+// ====================== ADMIN ======================
 
-// LIST ACCOUNTS
 app.get("/api/admin/accounts", auth, adminOnly, async (_req, res, next) => {
   try {
     const { data: accounts, error } = await adminDb
@@ -275,24 +266,19 @@ app.get("/api/admin/accounts", auth, adminOnly, async (_req, res, next) => {
       .limit(200);
 
     if (error) {
-      console.error("Account list failed:", error.message);
       return fail(res, 500, "Could not load accounts.");
     }
 
-    const ids = [
-      ...new Set((accounts || []).map((a) => a.owner_id).filter(Boolean)),
-    ];
-
+    const ids = [...new Set((accounts || []).map((a) => a.owner_id).filter(Boolean))];
     let profiles = [];
+
     if (ids.length) {
       const result = await adminDb
         .from("profiles")
         .select("id,full_name,status,avatar_url")
         .in("id", ids);
 
-      if (result.error) {
-        return fail(res, 500, "Could not load customer profiles.");
-      }
+      if (result.error) return fail(res, 500, "Could not load profiles.");
       profiles = result.data || [];
     }
 
@@ -320,11 +306,9 @@ app.post("/api/admin/accounts", auth, adminOnly, async (req, res, next) => {
     const phone = clean(req.body?.phone, 30);
     const country = clean(req.body?.country, 80);
     const currency = clean(req.body?.currency, 3).toUpperCase();
-    const password =
-      typeof req.body?.password === "string" ? req.body.password : "";
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
     const initial_balance = Number(req.body?.initial_balance);
-    const opening_note =
-      clean(req.body?.opening_note, 120) || "Opening balance";
+    const opening_note = clean(req.body?.opening_note, 120) || "Opening balance";
     const avatarBase64 = req.body?.avatar;
 
     if (
@@ -336,33 +320,24 @@ app.post("/api/admin/accounts", auth, adminOnly, async (req, res, next) => {
       !Number.isFinite(initial_balance) ||
       initial_balance < 0
     ) {
-      return fail(
-        res,
-        400,
-        "Check the fields. Password must be at least 6 characters."
-      );
+      return fail(res, 400, "Check the fields. Password must be at least 6 characters.");
     }
 
-    // 1. Create auth user
-    const { data: created, error: createError } =
-      await adminDb.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: { full_name },
-      });
+    // Create user
+    const { data: created, error: createError } = await adminDb.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name },
+    });
 
     if (createError || !created.user) {
-      return fail(
-        res,
-        400,
-        createError?.message || "Could not create customer login."
-      );
+      return fail(res, 400, createError?.message || "Could not create customer login.");
     }
 
     newUserId = created.user.id;
 
-    // 2. Create bank account
+    // Create account
     const { data: account, error: accountError } = await adminDb.rpc(
       "cfm_create_customer_account",
       {
@@ -378,24 +353,16 @@ app.post("/api/admin/accounts", auth, adminOnly, async (req, res, next) => {
     );
 
     if (accountError) {
-      console.error("Customer account RPC failed:", accountError.message);
       await adminDb.auth.admin.deleteUser(newUserId).catch(() => {});
       return fail(res, 500, "Account setup failed.");
     }
 
-    // 3. Upload photo to Supabase Storage
+    // Upload photo
     let avatar_url = null;
 
-    if (
-      avatarBase64 &&
-      typeof avatarBase64 === "string" &&
-      avatarBase64.startsWith("data:image")
-    ) {
+    if (avatarBase64 && typeof avatarBase64 === "string" && avatarBase64.startsWith("data:image")) {
       try {
-        const matches = avatarBase64.match(
-          /^data:image\/([a-zA-Z]+);base64,(.+)$/
-        );
-
+        const matches = avatarBase64.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
         if (matches) {
           const ext = matches[1] === "jpeg" ? "jpg" : matches[1];
           const buffer = Buffer.from(matches[2], "base64");
@@ -415,17 +382,14 @@ app.post("/api/admin/accounts", auth, adminOnly, async (req, res, next) => {
 
             avatar_url = publicUrl.publicUrl;
 
-            // Save URL to profiles
             await adminDb
               .from("profiles")
               .update({ avatar_url })
               .eq("id", newUserId);
-          } else {
-            console.error("Avatar upload error:", uploadError.message);
           }
         }
       } catch (err) {
-        console.error("Avatar processing failed:", err.message);
+        console.error("Avatar upload failed:", err.message);
       }
     }
 
@@ -446,8 +410,49 @@ app.post("/api/admin/accounts", auth, adminOnly, async (req, res, next) => {
   }
 });
 
-// CREDIT ACCOUNT
+// CREDIT
 app.post("/api/admin/credit", auth, adminOnly, async (req, res, next) => {
   try {
     const account_number = clean(req.body?.account_number, 24);
-    const reason = clean(req.body?.reason,
+    const reason = clean(req.body?.reason, 120);
+    const amount = Number(req.body?.amount);
+
+    if (!account_number || !reason || !validAmount(amount)) {
+      return fail(res, 400, "Enter an account number, reason and valid positive amount.");
+    }
+
+    const { data, error } = await adminDb.rpc("cfm_admin_credit", {
+      p_admin_id: req.user.id,
+      p_account_number: account_number,
+      p_amount: amount,
+      p_reason: reason,
+    });
+
+    if (error) {
+      return fail(res, 400, "Credit failed.");
+    }
+
+    res.json({ ok: true, result: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// 404
+app.use((req, res) => {
+  if (req.path.startsWith("/api/")) {
+    return fail(res, 404, "API route not found.");
+  }
+  res.status(404).json({ error: "This server provides API endpoints only." });
+});
+
+// Error handler
+app.use((error, _req, res, _next) => {
+  console.error("Request failed:", error.message);
+  if (res.headersSent) return;
+  res.status(500).json({ error: "Unexpected server error." });
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`CFM API listening on port ${PORT}`);
+});
